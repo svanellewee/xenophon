@@ -48,16 +48,44 @@ func (s *sqliteStorage) Add(e *Entry) (*Entry, error) {
 
 // ForTime implements StorageEngine
 func (s *sqliteStorage) ForTime(start time.Time, end time.Time) ([]*Entry, error) {
-	panic("unimplemented")
+	query := `
+		SELECT entry_id, entry_command, entry_location, entry_time
+		FROM entry
+		WHERE entry_time >= ? AND entry_time <= ?
+		ORDER BY entry_time ASC
+	`
+	rows, err := s.db.Query(query, start.UnixMilli()/1000, end.UnixMilli()/1000)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+
+	results := make([]*Entry, 0, defaultCapacity)
+	for rows.Next() {
+		e := &Entry{}
+		if err = rows.Scan(&e.Id, &e.Command, &e.Location, &e.Time); err != nil {
+			return nil, err
+		}
+		results = append(results, e)
+	}
+	if err = rows.Err(); err != nil {
+		return nil, err
+	}
+	return results, nil
+
 }
 
 // LastN implements StorageEngine
 func (s *sqliteStorage) LastN(n int) ([]*Entry, error) {
 	query := `
+	WITH bw_results AS (
+		SELECT * 
+		FROM entry
+		ORDER BY entry_time DESC
+		LIMIT ?
+	) 
 	SELECT entry_id, entry_command, entry_location, entry_time
-	FROM entry
-	ORDER BY entry_time ASC
-	LIMIT ?
+	FROM bw_results ORDER BY bw_results.entry_id ASC;
 	`
 	rows, err := s.db.Query(query, n)
 	if err != nil {
