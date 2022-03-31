@@ -2,17 +2,19 @@ package storage
 
 import (
 	"fmt"
+	"regexp"
 	"testing"
 	"time"
 
 	"github.com/stretchr/testify/assert"
+	//	"github.com/svanellewee/xenophon/storage/engines/sqlite3"
 )
 
 // Testing Mock dependencies...
 
 func newMemoryStore() *memoryStore {
 	return &memoryStore{
-		entries: make([]*Entry, 0, defaultCapacity),
+		entries: make([]*Entry, 0, DefaultCapacity),
 	}
 }
 
@@ -38,13 +40,23 @@ func (m *memoryStore) LastN(n int) ([]*Entry, error) {
 }
 
 func (m *memoryStore) ForTime(start time.Time, end time.Time) ([]*Entry, error) {
-	results := make([]*Entry, 0, defaultCapacity)
+	results := make([]*Entry, 0, DefaultCapacity)
 	for _, entry := range m.entries {
 		if entry.Time.After(start) && entry.Time.Before(end) {
 			results = append(results, entry)
 		}
 	}
 
+	return results, nil
+}
+
+func (m *memoryStore) ForLocation(location string) ([]*Entry, error) {
+	results := make([]*Entry, 0, DefaultCapacity)
+	for _, entry := range m.entries {
+		if string(entry.Location) == location {
+			results = append(results, entry)
+		}
+	}
 	return results, nil
 }
 
@@ -79,7 +91,7 @@ type environment struct {
 }
 
 func (e *environment) Get() (Environment, error) {
-	return e.env, nil //make([]string, 0, defaultCapacity), nil
+	return e.env, nil
 }
 
 func (e *environment) Set(env []string, err error) {
@@ -123,14 +135,59 @@ var testCases = []testCase{
 
 func TestGrepPipe(t *testing.T) {
 
+	store := newMemoryStore()
+	var mod *DatabaseModule
+	testCases := []struct {
+		command  string
+		location string
+	}{
+		{"cd /", "/tmp"},
+		{"echo $PATH", "/"},
+		{"cd /tmp/hello", "/"},
+		{"cd /tmp/bla", "/tmp/hello"},
+		{"for i in {1..3}; do echo \"$i\"; done", "/tmp/bla"},
+		{"vim", "/tmp/bla"},
+	}
+	for _, testCase := range testCases {
+		mod = NewStorageModule(store,
+			SetLocationGetter(&location{testCase.location, nil}),
+			SetEnvironmentGetter(&environment{[]string{}, nil}))
+
+		mod.Insert(testCase.command)
+	}
+	res, err := mod.LastN(100)
+	assert.Nil(t, err)
+
+	tmpResults := res.Filter(GrepCommandFilter("tmp"))
+	assert.Equal(t, 2, tmpResults.Count())
+	tmpResults.ForEach(func(i int, e *Entry) {
+		fmt.Println("filter on command", e.Command, e.Id)
+	})
+
+	tmpLocationResults := res.Filter(GrepLocationFilter("tmp"))
+	assert.Equal(t, 4, tmpLocationResults.Count())
+	tmpLocationResults.ForEach(func(i int, e *Entry) {
+		fmt.Println("location", e.Location, e.Id)
+	})
+
+	tmpLocationResultsAndCommand := res.Filter(GrepLocationFilter("tmp")).Filter(GrepCommandFilter("for i"))
+	assert.Equal(t, 1, tmpLocationResultsAndCommand.Count())
+	tmpLocationResultsAndCommand.ForEach(func(i int, e *Entry) {
+		matches, err := regexp.Match("^for", []byte(e.Command))
+		assert.Nil(t, err)
+		assert.True(t, matches)
+	})
+
 }
 
 func TestSomethingElse(t *testing.T) {
 	store := newMemoryStore()
 	for i, test := range testCases {
-		mod := NewDatabaseModule(store, test.Location, test.Environment)
+		mod := NewStorageModule(store,
+			SetLocationGetter(test.Location),
+			SetEnvironmentGetter(test.Environment))
+
 		t.Run(test.TestName, func(t *testing.T) {
-			//location.Set(test.Location, test.LocationError)
 			mod.Insert(test.Command)
 			lastEntry, err := mod.LastN(1)
 			assert.Nil(t, err)
@@ -147,7 +204,11 @@ func TestSomethingElse(t *testing.T) {
 
 func TestSomething(t *testing.T) {
 	t.Run("some test", func(t *testing.T) {
-		mod := NewDatabaseModule(newMemoryStore(), newTestLocation(), newTestEnv())
+		mod := NewStorageModule(
+			newMemoryStore(),
+			SetLocationGetter(newTestLocation()),
+			SetEnvironmentGetter(newTestEnv()),
+		)
 
 		mod.Insert("cd /")
 		mod.Insert("mkdir hello")

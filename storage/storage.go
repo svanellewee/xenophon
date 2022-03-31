@@ -1,30 +1,31 @@
 package storage
 
 import (
+	"database/sql"
 	"errors"
 	"fmt"
 	"os"
+	"regexp"
 	"time"
 )
 
 type EntryCount int
 type LocationPath string
 type Environment []string // encrypted bytestring ?
+type filterType func(i int, entry *Entry) bool
 
-type Entry struct {
-	Id       int64
-	Time     *time.Time
-	Location LocationPath
-	Command  string
-	Env      Environment
+type ResultStreamer interface {
+	LastEntries(n int) ResultStreamer
+	Period(start time.Time, end time.Time) ResultStreamer
+	Location(location string) ResultStreamer
+	Filter(filter filterType) ResultStreamer
 }
-
-type QueryOpts func() bool
 
 type StorageEngine interface {
 	Add(*Entry) (*Entry, error)
 	LastN(n int) ([]*Entry, error)
 	ForTime(start time.Time, end time.Time) ([]*Entry, error)
+	ForLocation(location string) ([]*Entry, error)
 	Close() error
 }
 
@@ -40,6 +41,7 @@ type DatabaseModule struct {
 	Storage     StorageEngine
 	Location    LocationGetter
 	Environment EnvironmentGetter
+	// TimeGetter?
 }
 
 type DefaultEnvironment struct{}
@@ -58,23 +60,12 @@ func (*DefaultLocation) Get() (LocationPath, error) {
 	return LocationPath(location), nil
 }
 
-func NewStandardModule(s StorageEngine) *DatabaseModule {
-	return NewDatabaseModule(s, &DefaultLocation{}, &DefaultEnvironment{})
-}
-
-func NewDatabaseModule(s StorageEngine, l LocationGetter, e EnvironmentGetter) *DatabaseModule {
-	return &DatabaseModule{
-		Storage:     s,
-		Location:    l,
-		Environment: e,
-	}
-}
-
 var ErrNotFound = errors.New("could not find entry")
 var ErrBadDataInsert = errors.New("insert had an error")
 
 type ResultSet struct {
 	entries []*Entry
+	db      *sql.DB
 }
 
 func (r *ResultSet) ForEach(doer func(int, *Entry)) {
@@ -83,13 +74,65 @@ func (r *ResultSet) ForEach(doer func(int, *Entry)) {
 	}
 }
 
-const defaultCapacity = 10
+func (r *ResultSet) Count() int {
+	return len(r.entries)
+}
+
+func (r *ResultSet) Entries() ([]Entry, error) {
+	returnEntries := make([]Entry, 0, DefaultCapacity)
+	for _, r := range r.entries {
+		e := Entry{}
+		r.Copy(&e)
+		returnEntries = append(returnEntries, e)
+	}
+	return returnEntries, nil
+}
+
+const DefaultCapacity = 10
+
+type FilterFunc func(index int, entry *Entry) error
+type ErrMatchNotFound struct {
+	searchString string
+	err          error
+}
+
+func (e *ErrMatchNotFound) Error() string {
+	return fmt.Sprintf("could not find %s", e.searchString)
+}
+
+func GrepCommandFilter(matchString string) FilterFunc {
+	return func(index int, entry *Entry) error {
+		matched, err := regexp.Match(matchString, []byte(entry.Command))
+		if err != nil {
+			return fmt.Errorf("could not find due to error %w", err)
+		}
+
+		if !matched {
+			return &ErrMatchNotFound{}
+		}
+		return nil
+	}
+}
+
+func GrepLocationFilter(matchString string) FilterFunc {
+	return func(index int, entry *Entry) error {
+		matched, err := regexp.Match(matchString, []byte(entry.Location))
+		if err != nil {
+			return fmt.Errorf("could not find due to error %w", err)
+		}
+
+		if !matched {
+			return &ErrMatchNotFound{}
+		}
+		return nil
+	}
+}
 
 // Filter is equivalent to the bash |-pipe.
-func (r *ResultSet) Filter(filter func(index int, entry *Entry) bool) *ResultSet {
-	results := make([]*Entry, 0, defaultCapacity)
+func (r *ResultSet) Filter(filter FilterFunc) *ResultSet {
+	results := make([]*Entry, 0, DefaultCapacity)
 	for i, entry := range r.entries {
-		if filter(i, entry) {
+		if err := filter(i, entry); err == nil {
 			results = append(results, entry)
 		}
 	}
@@ -163,7 +206,23 @@ func (d *DatabaseModule) ForTime(start time.Time, end time.Time) (*ResultSet, er
 		return nil, err
 	}
 
-	results := make([]*Entry, 0, defaultCapacity)
+	results := make([]*Entry, 0, DefaultCapacity)
+	for _, entry := range entries {
+		results = append(results, entry)
+	}
+
+	return &ResultSet{
+		entries: results,
+	}, nil
+}
+
+func (d *DatabaseModule) ForLocation(locationRegex string) (*ResultSet, error) {
+	entries, err := d.Storage.ForLocation(locationRegex)
+	if err != nil {
+		return nil, err
+	}
+
+	results := make([]*Entry, 0, DefaultCapacity)
 	for _, entry := range entries {
 		results = append(results, entry)
 	}

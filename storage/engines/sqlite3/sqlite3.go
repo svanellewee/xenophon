@@ -1,19 +1,20 @@
-package storage
+package sqlite3
 
 import (
 	"database/sql"
 	"time"
+
+	storage "github.com/svanellewee/xenophon/storage"
 
 	_ "github.com/mattn/go-sqlite3"
 )
 
 type sqliteStorage struct {
 	db *sql.DB
-	//	ctx context.Context
 }
 
 // Add implements StorageEngine
-func (s *sqliteStorage) Add(e *Entry) (*Entry, error) {
+func (s *sqliteStorage) Add(e *storage.Entry) (*storage.Entry, error) {
 	insertQuery := `
 	INSERT INTO entry(entry_command, entry_location)
 	VALUES (?, ?)
@@ -38,7 +39,7 @@ func (s *sqliteStorage) Add(e *Entry) (*Entry, error) {
 		return nil, err
 	}
 
-	entryResult := &Entry{}
+	entryResult := &storage.Entry{}
 	err = row.Scan(&entryResult.Id, &entryResult.Command, &entryResult.Location, &entryResult.Time)
 	if err != nil {
 		return nil, err
@@ -46,23 +47,11 @@ func (s *sqliteStorage) Add(e *Entry) (*Entry, error) {
 	return entryResult, nil
 }
 
-// ForTime implements StorageEngine
-func (s *sqliteStorage) ForTime(start time.Time, end time.Time) ([]*Entry, error) {
-	query := `
-		SELECT entry_id, entry_command, entry_location, entry_time
-		FROM entry
-		WHERE entry_time >= ? AND entry_time <= ?
-		ORDER BY entry_time ASC
-	`
-	rows, err := s.db.Query(query, start.UnixMilli()/1000, end.UnixMilli()/1000)
-	if err != nil {
-		return nil, err
-	}
-	defer rows.Close()
-
-	results := make([]*Entry, 0, defaultCapacity)
+func resultsFromRows(rows *sql.Rows) ([]*storage.Entry, error) {
+	var err error
+	results := make([]*storage.Entry, 0, storage.DefaultCapacity)
 	for rows.Next() {
-		e := &Entry{}
+		e := &storage.Entry{}
 		if err = rows.Scan(&e.Id, &e.Command, &e.Location, &e.Time); err != nil {
 			return nil, err
 		}
@@ -72,11 +61,42 @@ func (s *sqliteStorage) ForTime(start time.Time, end time.Time) ([]*Entry, error
 		return nil, err
 	}
 	return results, nil
+}
 
+// ForTime implements StorageEngine
+func (s *sqliteStorage) ForTime(start time.Time, end time.Time) ([]*storage.Entry, error) {
+	query := `
+	SELECT entry_id, entry_command, entry_location, entry_time
+	FROM entry
+	WHERE entry_time >= ? AND entry_time <= ?
+	ORDER BY entry_time ASC
+	`
+	rows, err := s.db.Query(query, start.UnixMilli()/1000, end.UnixMilli()/1000)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return resultsFromRows(rows)
+}
+
+// ForLocation finds all entries of the specified Location
+func (s *sqliteStorage) ForLocation(location string) ([]*storage.Entry, error) {
+	query := `
+	SELECT entry_id, entry_command, entry_location, entry_time
+	FROM entry
+	WHERE entry_location = ?
+	ORDER BY entry_time ASC
+	`
+	rows, err := s.db.Query(query, location)
+	if err != nil {
+		return nil, err
+	}
+	defer rows.Close()
+	return resultsFromRows(rows)
 }
 
 // LastN implements StorageEngine
-func (s *sqliteStorage) LastN(n int) ([]*Entry, error) {
+func (s *sqliteStorage) LastN(n int) ([]*storage.Entry, error) {
 	query := `
 	WITH bw_results AS (
 		SELECT * 
@@ -92,31 +112,18 @@ func (s *sqliteStorage) LastN(n int) ([]*Entry, error) {
 		return nil, err
 	}
 	defer rows.Close()
-
-	results := make([]*Entry, 0, defaultCapacity)
-	for rows.Next() {
-		e := &Entry{}
-		if err = rows.Scan(&e.Id, &e.Command, &e.Location, &e.Time); err != nil {
-			return nil, err
-		}
-		results = append(results, e)
-	}
-	if err = rows.Err(); err != nil {
-		return nil, err
-	}
-	return results, nil
+	return resultsFromRows(rows)
 }
 
 func (s *sqliteStorage) Close() error {
 	return s.db.Close()
 }
 
-func NewSqliteStorage(fileLocation string) (StorageEngine, error) {
+func NewSqliteStorage(fileLocation string) (storage.StorageEngine, error) {
 	db, err := sql.Open("sqlite3", fileLocation)
 	if err != nil {
 		panic(err)
 	}
-	//defer db.Close()
 
 	creationStatement := `
 	CREATE TABLE IF NOT EXISTS entry (
@@ -125,6 +132,7 @@ func NewSqliteStorage(fileLocation string) (StorageEngine, error) {
 		entry_location VARCHAR,
 		entry_time TIMESTAMP DEFAULT (strftime('%s','now'))
 	);
+	CREATE INDEX IF NOT EXISTS entry_location_index ON entry (entry_location);
 	`
 	_, err = db.Exec(creationStatement)
 	if err != nil {
