@@ -2,7 +2,7 @@ package storage
 
 type ModuleOpt func(db *DatabaseModule)
 
-func SetStorage(s StorageEngine) ModuleOpt {
+func SetStorage(s StorageStreamer) ModuleOpt {
 	return func(db *DatabaseModule) {
 		db.Storage = s
 	}
@@ -10,7 +10,7 @@ func SetStorage(s StorageEngine) ModuleOpt {
 
 func SetLocationGetter(l LocationGetter) ModuleOpt {
 	return func(db *DatabaseModule) {
-		db.Location = l
+		db.Locator = l
 	}
 }
 
@@ -20,9 +20,9 @@ func SetEnvironmentGetter(e EnvironmentGetter) ModuleOpt {
 	}
 }
 
-func NewStorageModule(s StorageEngine, moduleOpts ...ModuleOpt) *DatabaseModule {
+func NewStorageModule(s StorageStreamer, moduleOpts ...ModuleOpt) *DatabaseModule {
 	d := &DatabaseModule{
-		Location:    &DefaultLocation{},
+		Locator:     &DefaultLocation{},
 		Environment: &DefaultEnvironment{},
 		Storage:     s,
 	}

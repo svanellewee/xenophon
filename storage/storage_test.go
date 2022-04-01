@@ -22,6 +22,54 @@ type memoryStore struct {
 	entries []*Entry
 }
 
+func (d *memoryStore) Output() []*Entry {
+	return d.entries
+}
+
+// Filter implements ResultStreamer
+func (d *memoryStore) Filter(flr FilterType) ResultStreamer {
+	return filter(d.entries, flr)
+}
+
+// LastEntries implements ResultStreamer
+func (d *memoryStore) LastEntries(n int) ResultStreamer {
+	results := make([]*Entry, 0, DefaultCapacity)
+	var index int
+	if len(d.entries) > n {
+		index = len(d.entries) - n
+	}
+	results = append(results, d.entries[index:]...)
+	return &memoryStore{
+		entries: results,
+	}
+}
+
+// Location implements ResultStreamer
+func (d *memoryStore) Location(location string) ResultStreamer {
+	return filter(d.entries, func(index int, entry *Entry) bool {
+		return string(entry.Location) == location
+	})
+}
+
+func filter(entries []*Entry, fltr FilterType) *memoryStore {
+	results := make([]*Entry, 0, DefaultCapacity)
+	for i, entry := range entries {
+		if fltr(i, entry) {
+			results = append(results, entry)
+		}
+	}
+	return &memoryStore{
+		entries: results,
+	}
+}
+
+// Period implements ResultStreamer
+func (d *memoryStore) Period(start time.Time, end time.Time) ResultStreamer {
+	return filter(d.entries, func(i int, entry *Entry) bool {
+		return entry.Time.Before(end) && entry.Time.After(start)
+	})
+}
+
 func (m *memoryStore) Add(e *Entry) (*Entry, error) {
 	index := len(m.entries) + 1
 	e.Id = int64(index)
@@ -31,38 +79,38 @@ func (m *memoryStore) Add(e *Entry) (*Entry, error) {
 	return e, nil
 }
 
-func (m *memoryStore) LastN(n int) ([]*Entry, error) {
-	var startIndex int
-	if len(m.entries) >= n {
-		startIndex = len(m.entries) - n
-	}
-	return m.entries[startIndex:], nil
-}
-
-func (m *memoryStore) ForTime(start time.Time, end time.Time) ([]*Entry, error) {
-	results := make([]*Entry, 0, DefaultCapacity)
-	for _, entry := range m.entries {
-		if entry.Time.After(start) && entry.Time.Before(end) {
-			results = append(results, entry)
-		}
-	}
-
-	return results, nil
-}
-
-func (m *memoryStore) ForLocation(location string) ([]*Entry, error) {
-	results := make([]*Entry, 0, DefaultCapacity)
-	for _, entry := range m.entries {
-		if string(entry.Location) == location {
-			results = append(results, entry)
-		}
-	}
-	return results, nil
-}
-
 func (m *memoryStore) Close() error {
 	return nil
 }
+
+// func (m *memoryStore) LastN(n int) ([]*Entry, error) {
+// 	var startIndex int
+// 	if len(m.entries) >= n {
+// 		startIndex = len(m.entries) - n
+// 	}
+// 	return m.entries[startIndex:], nil
+// }
+
+// func (m *memoryStore) ForTime(start time.Time, end time.Time) ([]*Entry, error) {
+// 	results := make([]*Entry, 0, DefaultCapacity)
+// 	for _, entry := range m.entries {
+// 		if entry.Time.After(start) && entry.Time.Before(end) {
+// 			results = append(results, entry)
+// 		}
+// 	}
+
+// 	return results, nil
+// }
+
+// func (m *memoryStore) ForLocation(location string) ([]*Entry, error) {
+// 	results := make([]*Entry, 0, DefaultCapacity)
+// 	for _, entry := range m.entries {
+// 		if string(entry.Location) == location {
+// 			results = append(results, entry)
+// 		}
+// 	}
+// 	return results, nil
+// }
 
 type location struct {
 	where string
@@ -133,6 +181,26 @@ var testCases = []testCase{
 	},
 }
 
+func GrepLocationFilter(matchString string) FilterType {
+	return func(i int, e *Entry) bool {
+		matched, err := regexp.Match(matchString, []byte(e.Location))
+		if err != nil {
+			return false
+		}
+		return matched
+	}
+}
+
+func GrepCommandFilter(matchString string) FilterType {
+	return func(i int, e *Entry) bool {
+		matched, err := regexp.Match(matchString, []byte(e.Command))
+		if err != nil {
+			return false
+		}
+		return matched
+	}
+}
+
 func TestGrepPipe(t *testing.T) {
 
 	store := newMemoryStore()
@@ -155,51 +223,57 @@ func TestGrepPipe(t *testing.T) {
 
 		mod.Insert(testCase.command)
 	}
-	res, err := mod.LastN(100)
-	assert.Nil(t, err)
 
-	tmpResults := res.Filter(GrepCommandFilter("tmp"))
-	assert.Equal(t, 2, tmpResults.Count())
-	tmpResults.ForEach(func(i int, e *Entry) {
-		fmt.Println("filter on command", e.Command, e.Id)
-	})
+	r := mod.LastEntries(100)
+	entries := r.Filter(GrepCommandFilter("tmp")).Output()
+	assert.Equal(t, 2, len(entries))
 
-	tmpLocationResults := res.Filter(GrepLocationFilter("tmp"))
-	assert.Equal(t, 4, tmpLocationResults.Count())
-	tmpLocationResults.ForEach(func(i int, e *Entry) {
-		fmt.Println("location", e.Location, e.Id)
-	})
+	for _, entry := range entries {
+		fmt.Println("filter on command", entry.Command, entry.Id)
+	}
 
-	tmpLocationResultsAndCommand := res.Filter(GrepLocationFilter("tmp")).Filter(GrepCommandFilter("for i"))
-	assert.Equal(t, 1, tmpLocationResultsAndCommand.Count())
-	tmpLocationResultsAndCommand.ForEach(func(i int, e *Entry) {
+	entries = r.Filter(GrepLocationFilter("tmp")).Output()
+	assert.Equal(t, 4, len(entries))
+
+	for _, entry := range entries {
+		fmt.Println("filter on location", entry.Location, entry.Id)
+	}
+
+	tmpLocationAndCommand := r.Filter(GrepLocationFilter("tmp")).Filter(GrepCommandFilter("for i")).Output()
+	assert.Equal(t, 1, len(tmpLocationAndCommand))
+	for _, e := range tmpLocationAndCommand {
 		matches, err := regexp.Match("^for", []byte(e.Command))
 		assert.Nil(t, err)
 		assert.True(t, matches)
-	})
+	}
 
 }
 
-func TestSomethingElse(t *testing.T) {
+func TestLastEntries(t *testing.T) {
 	store := newMemoryStore()
 	for i, test := range testCases {
+		fmt.Println(">>>", i)
 		mod := NewStorageModule(store,
 			SetLocationGetter(test.Location),
 			SetEnvironmentGetter(test.Environment))
 
 		t.Run(test.TestName, func(t *testing.T) {
 			mod.Insert(test.Command)
-			lastEntry, err := mod.LastN(1)
-			assert.Nil(t, err)
-			assert.Equal(t, test.Command, lastEntry.entries[0].Command)
-			assert.Equal(t, len(store.entries), i+1)
+			l := mod.LastEntries(1).Output()
+			assert.Equal(t, test.Command, l[0].Command)
 
-			// This should only return the max
-			rr, err := mod.LastN(10)
-			assert.Nil(t, err)
-			assert.Equal(t, i+1, len(rr.entries))
+			// This should only return the max available entries
+			ll := mod.LastEntries(10).Output()
+			assert.Equal(t, i+1, len(ll))
 		})
 	}
+
+	t.Run("No test entries", func(t *testing.T) {
+		noMod := NewStorageModule(newMemoryStore())
+		e := noMod.LastEntries(10).Output()
+		fmt.Println(">>>>>>>>>", e)
+		assert.Equal(t, 0, len(e))
+	})
 }
 
 func TestSomething(t *testing.T) {
@@ -214,17 +288,15 @@ func TestSomething(t *testing.T) {
 		mod.Insert("mkdir hello")
 		mod.Insert("touch hello/bla.txt")
 
-		lastTwo, err := mod.LastN(2)
-		assert.Nil(t, err)
+		lastTwo := mod.LastEntries(2).Output()
+		assert.Equal(t, 2, len(lastTwo))
 
-		assert.Equal(t, 2, len(lastTwo.entries))
-		for _, s := range lastTwo.entries {
+		for _, s := range lastTwo {
 			fmt.Println(s.Id, s.Time, s.Command)
 		}
 
-		lastThree, err := mod.LastN(3)
-		assert.Nil(t, err)
-		assert.Equal(t, 3, len(lastThree.entries))
+		lastThree := mod.LastEntries(3).Output()
+		assert.Equal(t, 3, len(lastThree))
 
 		start := time.Now()
 		for _, command := range []string{
@@ -238,9 +310,8 @@ func TestSomething(t *testing.T) {
 		}
 		end := time.Now()
 
-		rr, err := mod.ForTime(start, end)
-		assert.Nil(t, err)
-		for _, ee := range rr.entries {
+		rr := mod.Period(start, end)
+		for _, ee := range rr.Output() {
 			fmt.Println(ee.Command)
 		}
 	})

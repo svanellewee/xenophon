@@ -2,7 +2,6 @@ package sqlite3
 
 import (
 	"fmt"
-	"log"
 	"testing"
 	"time"
 
@@ -11,10 +10,8 @@ import (
 )
 
 func TestSqlite(t *testing.T) {
-	sqliteDB, err := NewSqliteStorage(":memory:")
-	if err != nil {
-		log.Fatal(err)
-	}
+	sqliteDB := NewSqliteStorage(":memory:")
+
 	defer sqliteDB.Close()
 
 	mod := storage.NewStorageModule(sqliteDB)
@@ -27,13 +24,11 @@ func TestSqlite(t *testing.T) {
 	for _, testCase := range initialTestValues {
 		mod.Insert(testCase)
 	}
-	res, err := mod.LastN(100)
-	assert.Equal(t, len(initialTestValues), res.Count())
 
-	entries, err := res.Entries()
-	assert.Nil(t, err)
+	res := mod.LastEntries(100)
+	assert.Equal(t, len(initialTestValues), len(res.Output()))
 
-	for i, entry := range entries {
+	for i, entry := range res.Output() {
 		assert.Equal(t, initialTestValues[i], entry.Command)
 	}
 
@@ -60,21 +55,16 @@ func TestSqlite(t *testing.T) {
 		mod.Insert(testCommand)
 	}
 
-	r, err := mod.LastN(3)
-	assert.Nil(t, err)
-
-	entries, err = r.Entries()
-	assert.Nil(t, err)
-	for i, entry := range entries {
+	r := mod.LastEntries(3)
+	for i, entry := range r.Output() {
 		fmt.Println("Entry,", entry)
 		assert.Equal(t, testCommands[i], entry.Command)
 	}
 
-	r2, err := mod.ForTime(start, end)
-	assert.Nil(t, err)
-	r2.ForEach(func(i int, elem *storage.Entry) {
+	r2 := mod.Period(start, end)
+	for i, elem := range r2.Output() {
 		assert.Equal(t, timedTestCase[i], elem.Command)
-	})
+	}
 }
 
 type location struct {
@@ -117,10 +107,8 @@ func newTestEnv() *environment {
 }
 
 func TestLocationFind(t *testing.T) {
-	sqliteDB, err := NewSqliteStorage(":memory:")
-	if err != nil {
-		log.Fatal(err)
-	}
+	sqliteDB := NewSqliteStorage(":memory:")
+
 	defer sqliteDB.Close()
 
 	var mod *storage.DatabaseModule
@@ -143,11 +131,10 @@ func TestLocationFind(t *testing.T) {
 		mod.Insert(testCase.command)
 	}
 
-	slashLocationRes, err := mod.ForLocation("/")
-	assert.Nil(t, err)
-	assert.Equal(t, 2, slashLocationRes.Count())
-	slashLocationRes.ForEach(func(i int, e *storage.Entry) {
-		fmt.Println("Location found ->", e)
-	})
+	slashLocationRes := mod.Location("/").Output()
 
+	assert.Equal(t, 2, len(slashLocationRes))
+	for _, e := range slashLocationRes {
+		fmt.Println("Location found ->", e)
+	}
 }
