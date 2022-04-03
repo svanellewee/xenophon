@@ -57,10 +57,6 @@ func (s *sqliteStorage) Add(e *storage.Entry) (*storage.Entry, error) {
 	FROM entry WHERE entry_id = ?
 	`
 	row := s.db.QueryRow(query, id)
-	err = row.Scan()
-	if err != nil {
-		return nil, err
-	}
 
 	entryResult := &storage.Entry{}
 	err = row.Scan(&entryResult.Id, &entryResult.Command, &entryResult.Location, &entryResult.Time)
