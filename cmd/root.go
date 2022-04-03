@@ -21,6 +21,13 @@ var (
 	ErrorLogger   *log.Logger
 )
 
+const (
+	engineKey       = "storageengine"
+	databaseFileKey = "databasepath"
+	configName      = "config"
+	configType      = "yaml"
+)
+
 func initLoggers() {
 	InfoLogger = log.New(os.Stdout, "INFO: ", log.Ldate|log.Ltime|log.Lshortfile)
 	WarningLogger = log.New(os.Stdout, "WARNING: ", log.Ldate|log.Ltime|log.Lshortfile)
@@ -49,20 +56,13 @@ func buildConfigDir() (string, error) {
 	return configHome, nil
 }
 
-const (
-	engineKey   = "storageengine"
-	databaseKey = "databasepath"
-)
-
 func makeConfigFile(configHome string) error {
-	const configName = "config"
-	const configType = "yaml"
 
 	viper.AddConfigPath(configHome)
 	viper.SetConfigName(configName)
 	viper.SetConfigType(configType)
 
-	viper.SetDefault(databaseKey, filepath.Join(configHome, "history.db"))
+	viper.SetDefault(databaseFileKey, filepath.Join(configHome, "history.db"))
 	viper.SetDefault(engineKey, "sqlite3")
 
 	configFile = filepath.Join(configHome, configName+"."+configType)
@@ -87,25 +87,27 @@ var (
 	database *storage.DatabaseModule
 )
 
+// initEngine creates the backend specified by the `engineKey`
 func initEngine() {
 	engine := viper.GetString(engineKey)
 	switch engine {
+	// case "memory":
+	// 	db := memory.NewMemoryStore()
+	// 	database = storage.NewStorageModule(db)
+	default:
+		WarningLogger.Printf("Unknown engine %s, default to sqlite3", engine)
+		fallthrough
 	case "sqlite3":
-		db := sqlite3.NewSqliteStorage(viper.GetString(databaseKey))
+		db := sqlite3.NewSqliteStorage(viper.GetString(databaseFileKey))
 		database = storage.NewStorageModule(db)
 	}
 }
-
-// db := sqlite3.NewSqliteStorage(viper.GetString(databaseKey))
-// storage := storage.NewStorageModule(db)
-// _ = storage
 
 func init() {
 	cobra.OnInitialize(
 		initLoggers,
 		initConfig,
 		initEngine)
-
 }
 
 func initConfig() {
@@ -137,9 +139,9 @@ var rootCmd = &cobra.Command{
 	Use:   "xenophon",
 	Short: "Xenophon is a drop-in replacement for your shell history",
 	Long:  `Xenophon stores your bash history in a datastore. It supports multiple backends`,
-	// Run: func(cmd *cobra.Command, args []string) {
-	// 	// Do Stuff Here
-	// },
+	RunE: func(cmd *cobra.Command, args []string) error {
+		return nil
+	},
 }
 
 func Execute() {

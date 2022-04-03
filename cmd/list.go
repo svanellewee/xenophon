@@ -18,7 +18,8 @@ var listCmd = &cobra.Command{
 	RunE: func(cmd *cobra.Command, args []string) error {
 		location, err := os.Getwd()
 		if err != nil {
-			ErrorLogger.Fatalf("could not determine location: %v", err)
+			ErrorLogger.Printf("could not determine location: %v", err)
+			return err
 		}
 		for _, e := range database.Location(location).Output() {
 			fmt.Println(e)

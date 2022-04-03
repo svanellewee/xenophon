@@ -1,4 +1,4 @@
-package storage
+package memory
 
 import (
 	"fmt"
@@ -7,110 +7,8 @@ import (
 	"time"
 
 	"github.com/stretchr/testify/assert"
-	//	"github.com/svanellewee/xenophon/storage/engines/sqlite3"
+	"github.com/svanellewee/xenophon/storage"
 )
-
-// Testing Mock dependencies...
-
-func newMemoryStore() *memoryStore {
-	return &memoryStore{
-		entries: make([]*Entry, 0, DefaultCapacity),
-	}
-}
-
-type memoryStore struct {
-	entries []*Entry
-}
-
-func (d *memoryStore) Output() []*Entry {
-	return d.entries
-}
-
-// Filter implements ResultStreamer
-func (d *memoryStore) Filter(flr FilterType) ResultStreamer {
-	return filter(d.entries, flr)
-}
-
-// LastEntries implements ResultStreamer
-func (d *memoryStore) LastEntries(n int) ResultStreamer {
-	results := make([]*Entry, 0, DefaultCapacity)
-	var index int
-	if len(d.entries) > n {
-		index = len(d.entries) - n
-	}
-	results = append(results, d.entries[index:]...)
-	return &memoryStore{
-		entries: results,
-	}
-}
-
-// Location implements ResultStreamer
-func (d *memoryStore) Location(location string) ResultStreamer {
-	return filter(d.entries, func(index int, entry *Entry) bool {
-		return string(entry.Location) == location
-	})
-}
-
-func filter(entries []*Entry, fltr FilterType) *memoryStore {
-	results := make([]*Entry, 0, DefaultCapacity)
-	for i, entry := range entries {
-		if fltr(i, entry) {
-			results = append(results, entry)
-		}
-	}
-	return &memoryStore{
-		entries: results,
-	}
-}
-
-// Period implements ResultStreamer
-func (d *memoryStore) Period(start time.Time, end time.Time) ResultStreamer {
-	return filter(d.entries, func(i int, entry *Entry) bool {
-		return entry.Time.Before(end) && entry.Time.After(start)
-	})
-}
-
-func (m *memoryStore) Add(e *Entry) (*Entry, error) {
-	index := len(m.entries) + 1
-	e.Id = int64(index)
-	t := time.Now()
-	e.Time = &t
-	m.entries = append(m.entries, e)
-	return e, nil
-}
-
-func (m *memoryStore) Close() error {
-	return nil
-}
-
-// func (m *memoryStore) LastN(n int) ([]*Entry, error) {
-// 	var startIndex int
-// 	if len(m.entries) >= n {
-// 		startIndex = len(m.entries) - n
-// 	}
-// 	return m.entries[startIndex:], nil
-// }
-
-// func (m *memoryStore) ForTime(start time.Time, end time.Time) ([]*Entry, error) {
-// 	results := make([]*Entry, 0, DefaultCapacity)
-// 	for _, entry := range m.entries {
-// 		if entry.Time.After(start) && entry.Time.Before(end) {
-// 			results = append(results, entry)
-// 		}
-// 	}
-
-// 	return results, nil
-// }
-
-// func (m *memoryStore) ForLocation(location string) ([]*Entry, error) {
-// 	results := make([]*Entry, 0, DefaultCapacity)
-// 	for _, entry := range m.entries {
-// 		if string(entry.Location) == location {
-// 			results = append(results, entry)
-// 		}
-// 	}
-// 	return results, nil
-// }
 
 type location struct {
 	where string
@@ -126,11 +24,11 @@ func (l *location) Set(where string, err error) {
 	l.err = err
 }
 
-func (l *location) Get() (LocationPath, error) {
+func (l *location) Get() (storage.LocationPath, error) {
 	if l.err != nil {
 		return "", l.err
 	}
-	return LocationPath(l.where), nil
+	return storage.LocationPath(l.where), nil
 }
 
 type environment struct {
@@ -138,7 +36,7 @@ type environment struct {
 	err error
 }
 
-func (e *environment) Get() (Environment, error) {
+func (e *environment) Get() (storage.Environment, error) {
 	return e.env, nil
 }
 
@@ -156,8 +54,6 @@ type testCase struct {
 	Location    *location
 	Environment *environment
 	Command     string
-	//LocationError error
-	//EnvError error
 }
 
 var testCases = []testCase{
@@ -181,8 +77,8 @@ var testCases = []testCase{
 	},
 }
 
-func GrepLocationFilter(matchString string) FilterType {
-	return func(i int, e *Entry) bool {
+func GrepLocationFilter(matchString string) storage.FilterType {
+	return func(i int, e *storage.Entry) bool {
 		matched, err := regexp.Match(matchString, []byte(e.Location))
 		if err != nil {
 			return false
@@ -191,8 +87,8 @@ func GrepLocationFilter(matchString string) FilterType {
 	}
 }
 
-func GrepCommandFilter(matchString string) FilterType {
-	return func(i int, e *Entry) bool {
+func GrepCommandFilter(matchString string) storage.FilterType {
+	return func(i int, e *storage.Entry) bool {
 		matched, err := regexp.Match(matchString, []byte(e.Command))
 		if err != nil {
 			return false
@@ -203,8 +99,8 @@ func GrepCommandFilter(matchString string) FilterType {
 
 func TestGrepPipe(t *testing.T) {
 
-	store := newMemoryStore()
-	var mod *DatabaseModule
+	store := NewMemoryStore()
+	var mod *storage.DatabaseModule
 	testCases := []struct {
 		command  string
 		location string
@@ -217,9 +113,9 @@ func TestGrepPipe(t *testing.T) {
 		{"vim", "/tmp/bla"},
 	}
 	for _, testCase := range testCases {
-		mod = NewStorageModule(store,
-			SetLocationGetter(&location{testCase.location, nil}),
-			SetEnvironmentGetter(&environment{[]string{}, nil}))
+		mod = storage.NewStorageModule(store,
+			storage.SetLocationGetter(&location{testCase.location, nil}),
+			storage.SetEnvironmentGetter(&environment{[]string{}, nil}))
 
 		mod.Insert(testCase.command)
 	}
@@ -250,12 +146,12 @@ func TestGrepPipe(t *testing.T) {
 }
 
 func TestLastEntries(t *testing.T) {
-	store := newMemoryStore()
+	store := NewMemoryStore()
 	for i, test := range testCases {
 		fmt.Println(">>>", i)
-		mod := NewStorageModule(store,
-			SetLocationGetter(test.Location),
-			SetEnvironmentGetter(test.Environment))
+		mod := storage.NewStorageModule(store,
+			storage.SetLocationGetter(test.Location),
+			storage.SetEnvironmentGetter(test.Environment))
 
 		t.Run(test.TestName, func(t *testing.T) {
 			mod.Insert(test.Command)
@@ -269,7 +165,7 @@ func TestLastEntries(t *testing.T) {
 	}
 
 	t.Run("No test entries", func(t *testing.T) {
-		noMod := NewStorageModule(newMemoryStore())
+		noMod := storage.NewStorageModule(NewMemoryStore())
 		e := noMod.LastEntries(10).Output()
 		fmt.Println(">>>>>>>>>", e)
 		assert.Equal(t, 0, len(e))
@@ -278,10 +174,10 @@ func TestLastEntries(t *testing.T) {
 
 func TestSomething(t *testing.T) {
 	t.Run("some test", func(t *testing.T) {
-		mod := NewStorageModule(
-			newMemoryStore(),
-			SetLocationGetter(newTestLocation()),
-			SetEnvironmentGetter(newTestEnv()),
+		mod := storage.NewStorageModule(
+			NewMemoryStore(),
+			storage.SetLocationGetter(newTestLocation()),
+			storage.SetEnvironmentGetter(newTestEnv()),
 		)
 
 		mod.Insert("cd /")

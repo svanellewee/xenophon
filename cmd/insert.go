@@ -4,19 +4,20 @@ import "github.com/spf13/cobra"
 
 func init() {
 	rootCmd.AddCommand(insertCmd)
-	//	rootCmd.AddCommand(listCmd)
-
 }
 
 var insertCmd = &cobra.Command{
 	Use:   "insert",
 	Short: "insert into history",
-	//Long:  `Xenophon stores your bash history in a datastore. It supports multiple backends`,
+	Long:  `Insert into history store`,
 	RunE: func(cmd *cobra.Command, args []string) error {
-		database.Insert(args[0])
+
+		_, err := database.Insert(args[0])
+		if err != nil {
+			ErrorLogger.Printf("can't insert %v\n", err)
+			return err
+		}
+		defer database.Storage.Close()
 		return nil
 	},
-	// Run: func(cmd *cobra.Command, args []string) {
-	// 	// Do Stuff Here
-	// },
 }
